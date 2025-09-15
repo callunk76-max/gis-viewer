@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GIS Viewer (GeoJSON / SHP / ZIP + SLD + Legend)</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@latest/ol.css">
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; }
+    #map { width: 100%; height: 100%; }
+    #dropzone {
+      position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.6); color: white; padding: 8px 12px;
+      border-radius: 4px; font-family: sans-serif; z-index: 1000;
+    }
+    #legend {
+      position: absolute; bottom: 10px; right: 10px;
+      background: rgba(255,255,255,0.9); padding: 8px;
+      border-radius: 4px; font-family: sans-serif; font-size: 12px;
+      max-width: 200px; z-index: 1000;
+    }
+    #legend div { margin-bottom: 4px; display: flex; align-items: center; }
+    #legend span.color-box {
+      display: inline-block; width: 16px; height: 16px; margin-right: 6px;
+      border: 1px solid #555;
+    }
+  </style>
+</head>
+<body>
+<div id="dropzone">Drag & Drop GeoJSON / SHP / ZIP dan/atau SLD di sini</div>
+<div id="map"></div>
+<div id="legend"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/ol@latest/dist/ol.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/ol-sld@latest/dist/ol-sld.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/shpjs@latest/dist/shp.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/proj4@latest/dist/proj4.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/epsg-index@latest/epsg-index.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/epsg-index@latest/epsg-index-all.js"></script>
+
+<script>
+  let geojsonData = null;
+  let sldText = null;
+  let vectorLayer = null;
+  let detectedProjection = 'EPSG:4326';
+
+  const map = new ol.Map({
+    target: 'map',
+    layers: [
+      new ol.layer.Tile({ source: new ol.source.OSM() })
+    ],
+    view: new ol.View({
+      center: ol.proj.fromLonLat([120, -5.5]),
+      zoom: 10
+    })
+  });
+
+  function renderLayer() {
+    if (!geojsonData) return;
+
+    let styleFunction;
+    if (sldText) {
+      try {
+        const sldObject = SLDReader.Reader(sldText);
+        const style = SLDReader.getStyle(sldObject, Object.keys(sldObject.namedLayers)[0]);
+        styleFunction = feature => SLDReader.olStyle(style, feature);
+        buildLegendFromSLD(sldObject);
+      } catch (err) {
+        console.error("Gagal parse SLD:", err);
+        styleFunction = defaultStyle();
+        clearLegend();
+      }
+    } else {
+      styleFunction = defaultStyle();
+      clearLegend();
+    }
+
+    if (vectorLayer) map.removeLayer(vectorLayer);
+
+    vectorLayer = new ol.layer.Vector({
+      source: new ol.source.Vector({
+        features: new ol.format.GeoJSON().readFeatures(geojsonData, {
+          dataProjection: detectedProjection,
+          featureProjection: 'EPSG:3857'
+        })
+      }),
+      style: styleFunction
+    });
+
+    map.addLayer(vectorLayer);
+    map.getView().fit(vectorLayer.getSource().getExtent(), { padding: [20,20,20,20] });
+  }
+
+  function defaultStyle() {
+    return new ol.style.Style({
+      stroke: new ol.style.Stroke({ color: 'blue', width: 2 }),
+      fill: new ol.style.Fill({ color: 'rgba(0,0,255,0.1)' }),
+      image: new ol.style.Circle({
+        radius: 5,
+        fill: new ol.style.Fill({ color: 'red' }),
+        stroke: new ol.style.Stroke({ color: 'white', width: 1 })
+      })
+    });
+  }
+
+  function detectEPSGFromPRJ(prjText) {
+    try {
+      const match = prjText.match(/AUTHORITY\["EPSG","(\d+)"\]/);
+      if (match) {
+        const epsgCode = `EPSG:${match[1]}`;
+        if (epsgIndex[epsgCode]) {
+          proj4.defs(epsgCode, epsgIndex[epsgCode].proj4);
+          ol.proj.proj4.register(proj4);
+          detectedProjection = epsgCode;
+          console.log("Detected projection:", epsgCode);
+        }
+      }
+    } catch (err) {
+      console.warn("Tidak bisa deteksi EPSG dari PRJ:", err);
+    }
+  }
+
+  function buildLegendFromSLD(sldObject) {
+    const legendDiv = document.getElementById('legend');
+    legendDiv.innerHTML = '';
+    const namedLayer = Object.values(sldObject.namedLayers)[0];
+    const userStyles = namedLayer.userStyles || [];
+    userStyles.forEach(style => {
+      style.rules.forEach(rule => {
+        let color = '#ccc';
+        if (rule.symbolizers && rule.symbolizers.length > 0) {
+          const sym = rule.symbolizers[0];
+          if (sym.Fill && sym.Fill.color) color = sym.Fill.color;
+          if (sym.Stroke && sym.Stroke.color) color = sym.Stroke.color;
+        }
+        const label = rule.name || rule.title || 'No label';
+        const item = document.createElement('div');
+        const colorBox = document.createElement('span');
+        colorBox.className = 'color-box';
+        colorBox.style.background = color;
+        const text = document.createElement('span');
+        text.textContent = label;
+        item.appendChild(colorBox);
+        item.appendChild(text);
+        legendDiv.appendChild(item);
+      });
+    });
+  }
+
+  function clearLegend() {
+    document.getElementById('legend').innerHTML = '';
+  }
+
+  document.addEventListener('dragover', e => e.preventDefault());
+  document.addEventListener('drop', e => {
+    e.preventDefault();
+    for (const file of e.dataTransfer.files) {
+      const reader = new FileReader();
+
+      if (file.name.toLowerCase().endsWith('.geojson') || file.name.toLowerCase().endsWith('.json')) {
+        reader.onload = evt => {
+          try {
+            geojsonData = JSON.parse(evt.target.result);
+            detectedProjection = 'EPSG:4326';
+            renderLayer();
+          } catch (err) {
+            alert("GeoJSON tidak valid!");
+          }
+        };
+        reader.readAsText(file);
+
+      } else if (file.name.toLowerCase().endsWith('.sld')) {
+        reader.onload = evt => {
+          sldText = evt.target.result;
+          renderLayer();
+        };
+        reader.readAsText(file);
+
+      } else if (file.name.toLowerCase().endsWith('.zip')) {
+        const blob = file;
+        shp(blob).then(geojson => {
+          geojsonData = geojson;
+          detectedProjection = 'EPSG:4326';
+          renderLayer();
+        }).catch(err => {
+          console.error("Gagal membaca ZIP:", err);
+          alert("File ZIP tidak valid atau tidak lengkap.");
+        });
+
+      } else if (file.name.toLowerCase().endsWith('.shp')) {
+        const blob = file;
+        shp(blob).then(geojson => {
+          geojsonData = geojson;
+          detectedProjection = 'EPSG:4326';
+          renderLayer();
+        }).catch(err => {
+          console.error("Gagal membaca SHP:", err);
+          alert("File SHP tidak valid atau tidak lengkap.");
+        });
+      }
+    }
+  });
+</script>
+</body>
+</html>
