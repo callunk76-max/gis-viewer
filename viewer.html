@@ -5,40 +5,89 @@
   <title>Bulukumba GeoViewer</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@latest/ol.css">
   <style>
-    html, body { margin: 0; padding: 0; height: 100%; font-family: sans-serif; }
+    html, body { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', sans-serif; background: #f4f8fb; }
     #map { width: 100%; height: 100%; }
+
+    /* HEADER */
     #header {
       position: absolute; top: 10px; left: 10px;
-      background: rgba(0,60,136,0.9); color: white; padding: 8px 12px;
-      border-radius: 4px; display: flex; align-items: center; gap: 8px;
-      z-index: 1000;
+      background: linear-gradient(90deg, rgba(0,60,136,0.95), rgba(0,128,128,0.95));
+      color: white; padding: 8px 14px;
+      border-radius: 6px; display: flex; align-items: center; gap: 10px;
+      z-index: 1000; box-shadow: 0 2px 6px rgba(0,0,0,0.3);
     }
-    #header img { height: 32px; }
+    #header img { height: 40px; }
+    #header strong { font-size: 18px; }
+    #header span.tagline {
+      font-size: 12px; font-style: italic; opacity: 0.9;
+    }
+
+    /* DROPZONE */
     #dropzone {
-      position: absolute; top: 60px; left: 50%; transform: translateX(-50%);
+      position: absolute; top: 70px; left: 50%; transform: translateX(-50%);
       background: rgba(0,128,128,0.85); color: white; padding: 8px 12px;
       border-radius: 4px; z-index: 1000; font-size: 14px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
+
+    /* LEGEND */
     #legend {
-      position: absolute; bottom: 10px; right: 10px;
+      position: absolute; bottom: 30px; right: 10px;
       background: rgba(255,255,255,0.95); padding: 8px;
       border-radius: 4px; font-size: 12px; max-width: 200px; z-index: 1000;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
     #legend div { margin-bottom: 4px; display: flex; align-items: center; }
     #legend span.color-box {
       display: inline-block; width: 16px; height: 16px; margin-right: 6px;
       border: 1px solid #555;
     }
+
+    /* PROGRESS BAR */
+    #progress-container {
+      position: absolute; top: 110px; left: 50%; transform: translateX(-50%);
+      width: 300px; background: rgba(255,255,255,0.95);
+      border-radius: 4px; padding: 6px; z-index: 2000;
+      display: none; box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    #progress-bar {
+      width: 0%; height: 12px; background: linear-gradient(90deg, #007BFF, #00b3b3);
+      border-radius: 4px; transition: width 0.2s;
+    }
+    #progress-text {
+      font-size: 12px; text-align: center; margin-top: 4px;
+    }
+
+    /* WATERMARK */
+    #watermark {
+      position: absolute; bottom: 6px; left: 10px;
+      font-size: 11px; color: rgba(0,0,0,0.6);
+      background: rgba(255,255,255,0.6); padding: 2px 6px;
+      border-radius: 3px;
+    }
   </style>
 </head>
 <body>
 <div id="header">
   <img src="https://upload.wikimedia.org/wikipedia/commons/0/0b/Lambang_Kabupaten_Bulukumba.png" alt="Logo Bulukumba">
-  <strong>Bulukumba GeoViewer</strong>
+  <div>
+    <strong>Bulukumba GeoViewer</strong><br>
+    <span class="tagline">"Bumi Panrita Lopi – Data untuk Semua"</span>
+  </div>
 </div>
+
 <div id="dropzone">Tarik & letakkan file GeoJSON / SHP / ZIP dan/atau SLD di sini</div>
 <div id="map"></div>
 <div id="legend"></div>
+
+<!-- Progress bar -->
+<div id="progress-container">
+  <div id="progress-bar"></div>
+  <div id="progress-text">0%</div>
+</div>
+
+<!-- Watermark -->
+<div id="watermark">Design by callunk76</div>
 
 <script src="https://cdn.jsdelivr.net/npm/ol@latest/dist/ol.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/ol-sld@latest/dist/ol-sld.min.js"></script>
@@ -98,6 +147,7 @@
 
     map.addLayer(vectorLayer);
     map.getView().fit(vectorLayer.getSource().getExtent(), { padding: [20,20,20,20] });
+    hideProgress();
   }
 
   function defaultStyle() {
@@ -110,23 +160,6 @@
         stroke: new ol.style.Stroke({ color: 'white', width: 1 })
       })
     });
-  }
-
-  function detectEPSGFromPRJ(prjText) {
-    try {
-      const match = prjText.match(/AUTHORITY\["EPSG","(\d+)"\]/);
-      if (match) {
-        const epsgCode = `EPSG:${match[1]}`;
-        if (epsgIndex[epsgCode]) {
-          proj4.defs(epsgCode, epsgIndex[epsgCode].proj4);
-          ol.proj.proj4.register(proj4);
-          detectedProjection = epsgCode;
-          console.log("Detected projection:", epsgCode);
-        }
-      }
-    } catch (err) {
-      console.warn("Tidak bisa deteksi EPSG dari PRJ:", err);
-    }
   }
 
   function buildLegendFromSLD(sldObject) {
@@ -153,52 +186,3 @@
         item.appendChild(text);
         legendDiv.appendChild(item);
       });
-    });
-  }
-
-  function clearLegend() {
-    document.getElementById('legend').innerHTML = '';
-  }
-
-  document.addEventListener('dragover', e => e.preventDefault());
-  document.addEventListener('drop', e => {
-    e.preventDefault();
-    for (const file of e.dataTransfer.files) {
-      const reader = new FileReader();
-
-      if (file.name.toLowerCase().endsWith('.geojson') || file.name.toLowerCase().endsWith('.json')) {
-        reader.onload = evt => {
-          try {
-            geojsonData = JSON.parse(evt.target.result);
-            detectedProjection = 'EPSG:4326';
-            renderLayer();
-          } catch (err) {
-            alert("GeoJSON tidak valid!");
-          }
-        };
-        reader.readAsText(file);
-
-      } else if (file.name.toLowerCase().endsWith('.sld')) {
-        reader.onload = evt => {
-          sldText = evt.target.result;
-          renderLayer();
-        };
-        reader.readAsText(file);
-
-      } else if (file.name.toLowerCase().endsWith('.zip') || file.name.toLowerCase().endsWith('.shp')) {
-        const blob = file;
-        shp(blob).then(geojson => {
-          geojsonData = geojson;
-          detectedProjection = 'EPSG:4326';
-          renderLayer();
-        }).catch(err => {
-          console.error("Gagal membaca SHP/ZIP:", err);
-          alert("File SHP/ZIP tidak valid atau tidak lengkap.");
-        });
-      }
-    }
-  });
-</script>
-  <!--> test </-->
-</body>
-</html>
