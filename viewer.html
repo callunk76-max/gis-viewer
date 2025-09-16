@@ -1,222 +1,29 @@
-<!DOCTYPE html>
-<html lang="id">
-<head>
-<meta charset="UTF-8">
-<title>Bulukumba GeoViewer</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.4.0/ol.css">
-<style>
-html, body { margin:0; padding:0; height:100%; font-family:'Segoe UI',sans-serif; }
-#map { width:100%; height:100%; }
-#header { position:absolute; top:10px; left:10px; background:rgba(0,60,136,0.9); color:#fff; padding:8px 12px; border-radius:6px; z-index:2000; }
-#header strong { font-size:16px; display:block; }
-#header .tagline { font-size:12px; opacity:0.9; }
-#dropzone { position:absolute; top:60px; left:50%; transform:translateX(-50%); background:rgba(0,128,128,0.9); color:#fff; padding:6px 10px; border-radius:6px; z-index:2000; }
-#actions { position:absolute; top:60px; left:10px; z-index:2000; display:flex; gap:6px; }
-.btn { background:#fff; border:1px solid #ccc; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:12px; }
-#legend { position:absolute; bottom:40px; right:10px; background:rgba(255,255,255,0.95); padding:8px; border-radius:6px; font-size:12px; z-index:2000; }
-#notifications { position:absolute; top:120px; right:10px; max-width:300px; z-index:2000; display:flex; flex-direction:column; gap:6px; }
-.note { background:#fff; border-left:4px solid #007BFF; padding:6px 8px; border-radius:4px; font-size:12px; box-shadow:0 1px 3px rgba(0,0,0,0.15); }
-.note.error { border-color:#dc3545; }
-.note.success { border-color:#28a745; }
-.note .title { font-weight:700; margin-bottom:4px; }
-.note button { margin-top:4px; background:transparent; border:none; color:#007BFF; cursor:pointer; font-size:11px; }
-#popup { display:none; position:absolute; background:#fff; padding:8px; border:1px solid #ccc; border-radius:6px; z-index:3000; min-width:200px; }
-#popup label { display:block; font-size:12px; margin-top:4px; }
-#popup input { width:100%; padding:4px; font-size:12px; }
-#popup .row-actions { margin-top:6px; display:flex; gap:6px; justify-content:flex-end; }
-#watermark { position:absolute; bottom:8px; left:10px; font-size:11px; background:rgba(255,255,255,0.85); padding:4px 8px; border-radius:6px; z-index:2000; }
-</style>
-</head>
-<body>
-<div id="header">
-  <strong>Bulukumba GeoViewer</strong>
-  <div class="tagline">Bumi Panrita Lopi – Data untuk Semua</div>
-</div>
-<div id="dropzone">Tarik & letakkan GeoJSON / SHP / ZIP di sini</div>
-<div id="actions">
-  <button id="export-all" class="btn">Export Semua</button>
-  <button id="export-selected" class="btn">Export Terpilih</button>
-</div>
-<div id="map"></div>
-<div id="legend"></div>
-<div id="notifications"></div>
-<div id="popup"></div>
-<div id="watermark">Bulukumba • callunk76</div>
-
-<!-- Library dari CDN stabil -->
-<script src="https://cdn.jsdelivr.net/npm/ol@7.4.0/dist/ol.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/shpjs@4.0.4/dist/shp.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/proj4@2.9.2/dist/proj4.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/epsg-index@0.1.1/epsg-index.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/epsg-index@0.1.1/epsg-index-all.js"></script>
-
-<script>
-let geojsonData = null;
-let vectorLayer = null;
-let selectInteraction, modifyInteraction;
-
-// Notifikasi
-function pushNote({title, body='', type='info'}) {
-  const wrap = document.getElementById('notifications');
-  const div = document.createElement('div');
-  div.className = 'note ' + (type==='error'?'error':type==='success'?'success':'');
-  div.innerHTML = `<div class="title">${title}</div><div>${body}</div><button>Tutup</button>`;
-  div.querySelector('button').onclick = () => wrap.removeChild(div);
-  wrap.appendChild(div);
-}
-
-// Map init
-const map = new ol.Map({
-  target: 'map',
-  layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
-  view: new ol.View({ center: ol.proj.fromLonLat([120, -5.5]), zoom: 10 })
-});
-
-// Default style
-function defaultStyle() {
-  return new ol.style.Style({
-    stroke: new ol.style.Stroke({ color: '#007BFF', width: 2 }),
-    fill: new ol.style.Fill({ color: 'rgba(0,123,255,0.2)' }),
-    image: new ol.style.Circle({
-      radius: 5,
-      fill: new ol.style.Fill({ color: '#FF4136' }),
-      stroke: new ol.style.Stroke({ color: '#fff', width: 1 })
-    })
-  });
-}
-
-// Render layer
-function renderLayer() {
-  if (!geojsonData) return;
-  if (vectorLayer) map.removeLayer(vectorLayer);
-
-  const features = new ol.format.GeoJSON().readFeatures(geojsonData, {
-    dataProjection: 'EPSG:4326',
-    featureProjection: 'EPSG:3857'
-  });
-
-  vectorLayer = new ol.layer.Vector({
-    source: new ol.source.Vector({ features }),
-    style: defaultStyle()
-  });
-  map.addLayer(vectorLayer);
-  map.getView().fit(vectorLayer.getSource().getExtent(), { padding:[20,20,20,20], maxZoom:15 });
-
-  // Reset interaksi
-  if (selectInteraction) map.removeInteraction(selectInteraction);
-  if (modifyInteraction) map.removeInteraction(modifyInteraction);
-
-  selectInteraction = new ol.interaction.Select({ layers: [vectorLayer] });
-  map.addInteraction(selectInteraction);
-
-  // Edit atribut saat klik
-  selectInteraction.on('select', e => {
-    const feature = e.selected[0];
-    if (!feature) { document.getElementById('popup').style.display='none'; return; }
-    showEditPopup(feature);
-  });
-
-  // Edit geometri titik langsung
-  modifyInteraction = new ol.interaction.Modify({
-    features: selectInteraction.getFeatures()
-  });
-  map.addInteraction(modifyInteraction);
-
-  pushNote({ title:'Render selesai', body:`${features.length} fitur ditampilkan`, type:'success' });
-}
-
-// Popup edit atribut
-function showEditPopup(feature) {
-  const coord = ol.extent.getCenter(feature.getGeometry().getExtent());
-  const pixel = map.getPixelFromCoordinate(coord);
-  const props = feature.getProperties();
-  const keys = Object.keys(props).filter(k => k !== 'geometry');
-
-  let html = '<form id="attrForm">';
-  keys.forEach(k => {
-    html += `<label>${k}</label><input name="${k}" value="${props[k]??''}">`;
-  });
-  html += `<div class="row-actions"><button type="button" id="cancelEdit">Batal</button><button type="submit">Simpan</button></div></form>`;
-
-  const popup = document.getElementById('popup');
-  popup.innerHTML = html;
-  popup.style.left = pixel[0] + 'px';
-  popup.style.top = pixel[1] + 'px';
-  popup.style.display = 'block';
-
-  document.getElementById('cancelEdit').onclick = () => popup.style.display='none';
-  document.getElementById('attrForm').onsubmit = ev => {
-    ev.preventDefault();
-    const fd = new FormData(ev.target);
-    fd.forEach((val, key) => feature.set(key, val));
-    vectorLayer.changed();
-    popup.style.display='none';
-  };
-}
-
-// Export
-function exportFeatures(features, filename) {
-  if (!features.length) {
-    pushNote({ title:'Export', body:'Tidak ada fitur untuk diexport.', type:'error' });
-    return;
-  }
-  const geo = new ol.format.GeoJSON().writeFeatures(features, {
-    featureProjection:'EPSG:3857',
+  const geo = new ol.format.GeoJSON().writeFeatures(vectorLayer.getSo>    featureProjection:'EPSG:3857',
     dataProjection:'EPSG:4326'
   });
-  const blob = new Blob([geo], {type:'application/json;charset=utf-8'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-  pushNote({ title:'Export selesai', body:`${features.length} fitur diexport ke ${filename}`, type:'success' });
-}
-
-// Tombol export
-document.getElementById('export-all').onclick = () => {
-  if (!vectorLayer) return pushNote({ title:'Export', body:'Layer belum ada.', type:'error' });
-  exportFeatures(vectorLayer.getSource().getFeatures(), 'bulukumba_export.geojson');
-};
-document.getElementById('export-selected').onclick = () => {
-  if (!selectInteraction) return pushNote({ title:'Export', body:'Tidak ada fitur terpilih.', type:'error' });
-  exportFeatures(selectInteraction.getFeatures().getArray(), 'bulukumba_selected.geojson');
-};
-
-// Drag & drop handler
-['dragenter','dragover','dragleave','drop'].forEach(evt=>{
-  window.addEventListener(evt, e=>{ e.preventDefault(); e.stopPropagation(); }, false);
+  localStorage.setItem('lastGeoJSON', geo);
+  dataChanged = false;
 });
-document.addEventListener('drop', async e => {
-  const files = Array.from(e.dataTransfer.files || []);
-  if (!files.length) return;
-  geojsonData = null;
-  for (const file of files) {
-    const name = file.name.toLowerCase();
+
+// Load data terakhir dari localStorage saat halaman dibuka
+window.addEventListener('load', () => {
+  const saved = localStorage.getItem('lastGeoJSON');
+  if (saved) {
     try {
-      if (name.endsWith('.geojson') || name.endsWith('.json')) {
-        const txt = await file.text();
-        const json = JSON.parse(txt);
-        if (!json || json.type !== 'FeatureCollection') throw new Error('Bukan FeatureCollection');
-        geojsonData = json;
-        pushNote({ title:'GeoJSON dimuat', body:`${json.features.length} fitur`, type:'success' });
-      } else if (name.endsWith('.zip') || name.endsWith('.shp')) {
-        const geo = await shp(file);
-        if (!geo || geo.type !== 'FeatureCollection') throw new Error('Shapefile tidak valid');
-        geojsonData = geo;
-        pushNote({ title:'SHP/ZIP dimuat', body:`${geo.features.length} fitur`, type:'success' });
-      } else {
-        pushNote({ title:'Tipe file tidak didukung', body:file.name, type:'error' });
-      }
-    } catch (err) {
-      pushNote({ title:`Gagal memuat ${file.name}`, body:String(err), type:'error' });
+      geojsonData = JSON.parse(saved);
+      renderLayer();
+      pushNote({ title:'Data dipulihkan', body:'Memuat data terakhir >    } catch(e) {
+      console.warn('Gagal memuat data tersimpan', e);
     }
   }
-  renderLayer();
+});
+
+// Peringatan sebelum reload/close jika ada perubahan
+window.addEventListener('beforeunload', function (e) {
+  if (dataChanged) {
+    e.preventDefault();
+    e.returnValue = 'Perubahan belum diexport. Simpan sebagai file ya>  }
 });
 </script>
 </body>
 </html>
-    
