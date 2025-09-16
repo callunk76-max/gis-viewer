@@ -44,8 +44,12 @@ html, body { margin:0; padding:0; height:100%; font-family:'Segoe UI',sans-serif
 <div id="popup"></div>
 <div id="watermark">Bulukumba • callunk76</div>
 
+<!-- Library -->
 <script src="https://cdn.jsdelivr.net/npm/ol@latest/dist/ol.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/shpjs@latest/dist/shp.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/proj4@latest/dist/proj4.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/epsg-index@0.1.1/epsg-index.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/epsg-index@0.1.1/epsg-index-all.js"></script>
 
 <script>
 let geojsonData = null;
@@ -153,12 +157,14 @@ function showEditPopup(feature) {
 
 // Export
 function exportFeatures(features, filename) {
-  if (!features.length) return pushNote({ title:'Export', body:'Tidak ada fitur', type:'error' });
+  if (!features.length) {
+    pushNote({ title:'Export', body:'Tidak ada fitur untuk diexport.', type:'error' });
+    return;
+  }
   const geo = new ol.format.GeoJSON().writeFeatures(features, {
     featureProjection:'EPSG:3857',
     dataProjection:'EPSG:4326'
   });
-  // Lanjutan fungsi exportFeatures
   const blob = new Blob([geo], {type:'application/json;charset=utf-8'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -213,4 +219,4 @@ document.addEventListener('drop', async e => {
 </script>
 </body>
 </html>
-    
+ 
