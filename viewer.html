@@ -113,23 +113,33 @@
     })
   });
 
+  function rgbaToCss(color) {
+    if (Array.isArray(color)) {
+      return `rgba(${color.join(',')})`;
+    }
+    return color || '#ccc';
+  }
+
   function renderLayer() {
     if (!geojsonData) return;
 
-    let styleFunction;
+    let styleFunction = defaultStyle();
+
     if (sldText) {
       try {
         const sldObject = SLDReader.Reader(sldText);
-        const style = SLDReader.getStyle(sldObject, Object.keys(sldObject.namedLayers)[0]);
-        styleFunction = feature => SLDReader.olStyle(style, feature);
-        buildLegendFromSLD(sldObject);
+        const layerNames = Object.keys(sldObject.namedLayers);
+        console.log("Layer di SLD:", layerNames);
+        if (layerNames.length > 0) {
+          const style = SLDReader.getStyle(sldObject, layerNames[0]);
+          styleFunction = feature => SLDReader.olStyle(style, feature);
+          buildLegendFromSLD(sldObject);
+        }
       } catch (err) {
         console.error("Gagal parse SLD:", err);
-        styleFunction = defaultStyle();
         clearLegend();
       }
     } else {
-      styleFunction = defaultStyle();
       clearLegend();
     }
 
@@ -172,17 +182,94 @@
         let color = '#ccc';
         if (rule.symbolizers && rule.symbolizers.length > 0) {
           const sym = rule.symbolizers[0];
-          if (sym.Fill && sym.Fill.color) color = sym.Fill.color;
-          if (sym.Stroke && sym.Stroke.color) color = sym.Stroke.color;
+          if (sym.Fill && sym.Fill.color) color = rgbaToCss(sym.Fill.color);
+          if (sym.Stroke && sym.Stroke.color) color = rgbaToCss(sym.Stroke.color);
         }
         const label = rule.title || rule.name || 'Tanpa label';
         const item = document.createElement('div');
         const colorBox = document.createElement('span');
         colorBox.className = 'color-box';
         colorBox.style.background = color;
-        const text = document.createElement('span');
-        text.textContent = label;
+        const text = document.createElement
+                text.textContent = label;
         item.appendChild(colorBox);
         item.appendChild(text);
         legendDiv.appendChild(item);
       });
+    });
+  }
+
+  function clearLegend() {
+    document.getElementById('legend').innerHTML = '';
+  }
+
+  function showProgress() {
+    document.getElementById('progress-container').style.display = 'block';
+    updateProgress(0);
+  }
+
+  function updateProgress(percent) {
+    document.getElementById('progress-bar').style.width = percent + '%';
+    document.getElementById('progress-text').textContent = percent + '%';
+  }
+
+  function hideProgress() {
+    document.getElementById('progress-container').style.display = 'none';
+  }
+
+  document.addEventListener('dragover', e => e.preventDefault());
+  document.addEventListener('drop', e => {
+    e.preventDefault();
+    for (const file of e.dataTransfer.files) {
+      const reader = new FileReader();
+
+      if (file.name.toLowerCase().endsWith('.geojson') || file.name.toLowerCase().endsWith('.json')) {
+        showProgress();
+        reader.onprogress = evt => {
+          if (evt.lengthComputable) {
+            updateProgress(Math.round((evt.loaded / evt.total) * 100));
+          }
+        };
+        reader.onload = evt => {
+          try {
+            geojsonData = JSON.parse(evt.target.result);
+            detectedProjection = 'EPSG:4326';
+            renderLayer();
+          } catch (err) {
+            alert("GeoJSON tidak valid!");
+            hideProgress();
+          }
+        };
+        reader.readAsText(file);
+
+      } else if (file.name.toLowerCase().endsWith('.sld')) {
+        showProgress();
+        reader.onprogress = evt => {
+          if (evt.lengthComputable) {
+            updateProgress(Math.round((evt.loaded / evt.total) * 100));
+          }
+        };
+        reader.onload = evt => {
+          sldText = evt.target.result;
+          renderLayer();
+        };
+        reader.readAsText(file);
+
+      } else if (file.name.toLowerCase().endsWith('.zip') || file.name.toLowerCase().endsWith('.shp')) {
+        showProgress();
+        shp(file).then(geojson => {
+          geojsonData = geojson;
+          detectedProjection = 'EPSG:4326';
+          updateProgress(100);
+          renderLayer();
+        }).catch(err => {
+          console.error("Gagal membaca SHP/ZIP:", err);
+          alert("File SHP/ZIP tidak valid atau tidak lengkap.");
+          hideProgress();
+        });
+      }
+    }
+  });
+</script>
+</body>
+</html>
